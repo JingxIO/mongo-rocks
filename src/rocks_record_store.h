@@ -198,10 +198,10 @@ namespace mongo {
         bool cappedMaxDocs() const { invariant(_isCapped); return _cappedMaxDocs; }
         bool cappedMaxSize() const { invariant(_isCapped); return _cappedMaxSize; }
         bool isOplog() const { return _isOplog; }
-	void setOplogCFHandle(rocksdb::ColumnFamilyHandle* cfHandle) {
-	    stdx::lock_guard<stdx::mutex> lk(_oplogCFMutex);
-            if (_oplogCFHandle == nullptr) {
-		_oplogCFHandle = cfHandle;
+	void setCFHandle(rocksdb::ColumnFamilyHandle* cfHandle) {
+	    stdx::lock_guard<stdx::mutex> lk(_cfMutex);
+            if (_cfHandle == nullptr) {
+		_cfHandle = cfHandle;
 	    }
 	}
 	
@@ -260,7 +260,8 @@ namespace mongo {
 
         static RecordId _makeRecordId( const rocksdb::Slice& slice );
 
-        static RecordData _getDataFor(rocksdb::DB* db, const std::string& prefix,
+        static RecordData _getDataFor(rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cfHandle,
+				      const std::string& prefix,
                                       OperationContext* txn, const RecordId& loc);
 
         RecordId _nextId();
@@ -290,8 +291,9 @@ namespace mongo {
         const bool _isOplog;
         // nullptr iff _isOplog == false
         RocksOplogKeyTracker* _oplogKeyTracker;
-	mutable stdx::mutex _oplogCFMutex;
-	rocksdb::ColumnFamilyHandle* _oplogCFHandle;
+	
+	mutable stdx::mutex _cfMutex;
+	rocksdb::ColumnFamilyHandle* _cfHandle;
         // keep track of when we compacted oplog last time. only valid when _isOplog == true.
         // Protected by _cappedDeleterMutex.
         Timer _oplogSinceLastCompaction;

@@ -245,17 +245,17 @@ namespace mongo {
     class RocksOplogKeyTracker {
     public:
         RocksOplogKeyTracker(std::string prefix) : _prefix(std::move(prefix)) {}
-        void insertKey(RocksRecoveryUnit* ru, rocksdb::ColumnFamilyHandle* _cfHandle,
+        void insertKey(RocksRecoveryUnit* ru, rocksdb::ColumnFamilyHandle* cfHandle,
 		       const RecordId& loc, int len) {
             uint32_t lenLittleEndian = endian::nativeToLittle(static_cast<uint32_t>(len));
-            ru->writeBatch()->Put(_cfHandle,
+            ru->writeBatch()->Put(cfHandle,
 				  RocksRecordStore::_makePrefixedKey(_prefix, loc),
                                   rocksdb::Slice(reinterpret_cast<const char*>(&lenLittleEndian),
                                                  sizeof(lenLittleEndian)));
         }
-        void deleteKey(RocksRecoveryUnit* ru, rocksdb::ColumnFamilyHandle* _cfHandle,
+        void deleteKey(RocksRecoveryUnit* ru, rocksdb::ColumnFamilyHandle* cfHandle,
 		       const RecordId& loc) {
-            ru->writeBatch()->Delete(_cfHandle, RocksRecordStore::_makePrefixedKey(_prefix, loc));
+            ru->writeBatch()->Delete(cfHandle, RocksRecordStore::_makePrefixedKey(_prefix, loc));
             _deletedKeysSinceCompaction++;
         }
         rocksdb::Iterator* newIterator(RocksRecoveryUnit* ru) {
@@ -294,7 +294,7 @@ namespace mongo {
           _cappedCallback(cappedCallback),
           _cappedDeleteCheckCount(0),
           _isOplog(NamespaceString::oplog(ns)),
-	  _oplogCFHandle(nullptr),
+	  _cfHandle(nullptr),
           _oplogKeyTracker(_isOplog ? new RocksOplogKeyTracker(rocksGetNextPrefix(_prefix))
                                     : nullptr),
           _cappedOldestKeyHint(0),
@@ -374,7 +374,7 @@ namespace mongo {
     }
 
     RecordData RocksRecordStore::dataFor(OperationContext* txn, const RecordId& loc) const {
-        RecordData rd = _getDataFor(_db, _prefix, txn, loc);
+        RecordData rd = _getDataFor(_db, _cfHandle, _prefix, txn, loc);
         massert(28605, "Didn't find RecordId in RocksRecordStore", (rd.data() != nullptr));
         return rd;
     }
@@ -388,18 +388,14 @@ namespace mongo {
         }
 
         std::string oldValue;
-	// TBD(kg): should fetch from oplog-cf if _isOplog ?
-        auto status = ru->Get(key, &oldValue);
+	auto status = ru->Get(key, &oldValue, _cfHandle);
         invariantRocksOK(status);
         int oldLength = oldValue.size();
 
-	
+	ru->writeBatch()->Delete(_cfHandle, key);
         if (_isOplog) {
-	    ru->writeBatch()->Delete(_oplogCFHandle, key);
-	    _oplogKeyTracker->deleteKey(ru, _oplogCFHandle, dl);
-        } else {
-	    ru->writeBatch()->Delete(key);
-	}
+	    _oplogKeyTracker->deleteKey(ru, _cfHandle, dl);
+        }
 
         _changeNumRecords(txn, -1);
         _increaseDataSize(txn, -oldLength);
@@ -578,12 +574,10 @@ namespace mongo {
                     }
                 }
 
+		ru->writeBatch()->Delete(_cfHandle, key);
                 if (_isOplog) {
-		    ru->writeBatch()->Delete(_oplogCFHandle, key);
-                    _oplogKeyTracker->deleteKey(ru, _oplogCFHandle, newestOld);
-                } else {
-		    ru->writeBatch()->Delete(key);
-		}
+                    _oplogKeyTracker->deleteKey(ru, _cfHandle, newestOld);
+                }
 
                 iter->Next();
             }
@@ -634,14 +628,14 @@ namespace mongo {
                 // schedule compaction for oplog
                 std::string oldestAliveKey(_makePrefixedKey(_prefix, _cappedOldestKeyHint));
                 rocksdb::Slice begin(_prefix), end(oldestAliveKey);
-                rocksdb::experimental::SuggestCompactRange(_db, _oplogCFHandle, &begin, &end);
+                rocksdb::experimental::SuggestCompactRange(_db, _cfHandle, &begin, &end);
 
                 // schedule compaction for oplog tracker
                 std::string oplogKeyTrackerPrefix(rocksGetNextPrefix(_prefix));
                 oldestAliveKey = _makePrefixedKey(oplogKeyTrackerPrefix, _cappedOldestKeyHint);
                 begin = rocksdb::Slice(oplogKeyTrackerPrefix);
                 end = rocksdb::Slice(oldestAliveKey);
-                rocksdb::experimental::SuggestCompactRange(_db, _oplogCFHandle, &begin, &end);
+                rocksdb::experimental::SuggestCompactRange(_db, _cfHandle, &begin, &end);
                 
                 _oplogKeyTracker->resetDeletedSinceCompaction();
             }
@@ -679,12 +673,10 @@ namespace mongo {
 
         // No need to register the write here, since we just allocated a new RecordId so no other
         // transaction can access this key before we commit
+	ru->writeBatch()->Put(_cfHandle, _makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len));
         if (_isOplog) {
-	    ru->writeBatch()->Put(_oplogCFHandle, _makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len));
-            _oplogKeyTracker->insertKey(ru, _oplogCFHandle, loc, len);
-        } else {
-	    ru->writeBatch()->Put(_makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len));
-	}
+            _oplogKeyTracker->insertKey(ru, _cfHandle, loc, len);
+        }
 
         _changeNumRecords( txn, 1 );
         _increaseDataSize( txn, len );
@@ -738,17 +730,14 @@ namespace mongo {
         }
 
         std::string old_value;
-        auto status = ru->Get(key, &old_value);
+        auto status = ru->Get(key, &old_value, _cfHandle);
         invariantRocksOK(status);
-
         int old_length = old_value.size();
 
+	ru->writeBatch()->Put(_cfHandle, key, rocksdb::Slice(data, len));
         if (_isOplog) {
-	    ru->writeBatch()->Put(_oplogCFHandle, key, rocksdb::Slice(data, len));
-            _oplogKeyTracker->insertKey(ru, _oplogCFHandle, loc, len);
-        } else {
-	    ru->writeBatch()->Put(key, rocksdb::Slice(data, len));
-	}
+            _oplogKeyTracker->insertKey(ru, _cfHandle, loc, len);
+        }
 
         _increaseDataSize(txn, len - old_length);
 
@@ -807,11 +796,7 @@ namespace mongo {
         std::string endString(_makePrefixedKey(_prefix, RecordId::max()));
         rocksdb::Slice beginRange(beginString);
         rocksdb::Slice endRange(endString);
-	if (_isOplog) {
-	    rocksToMongoStatus(_db->CompactRange(_oplogCFHandle, &beginRange, &endRange));
-	} else {
-	    return rocksToMongoStatus(_db->CompactRange(&beginRange, &endRange));
-	}
+	rocksToMongoStatus(_db->CompactRange(_cfHandle, &beginRange, &endRange));
     }
 
     Status RocksRecordStore::validate( OperationContext* txn,
@@ -1020,19 +1005,20 @@ namespace mongo {
 
     bool RocksRecordStore::findRecord( OperationContext* txn,
                                        const RecordId& loc, RecordData* out ) const {
-        RecordData rd = _getDataFor(_db, _prefix, txn, loc);
+        RecordData rd = _getDataFor(_db, _cfHandle, _prefix, txn, loc);
         if ( rd.data() == NULL )
             return false;
         *out = rd;
         return true;
     }
 
-    RecordData RocksRecordStore::_getDataFor(rocksdb::DB* db, const std::string& prefix,
+    RecordData RocksRecordStore::_getDataFor(rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cfHandle,
+					     const std::string& prefix,
                                              OperationContext* txn, const RecordId& loc) {
         RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
 
         std::string valueStorage;
-        auto status = ru->Get(_makePrefixedKey(prefix, loc), &valueStorage);
+	auto status = ru->Get(_makePrefixedKey(prefix, loc), &valueStorage, cfHandle);
         if (status.IsNotFound()) {
             return RecordData(nullptr, 0);
         }

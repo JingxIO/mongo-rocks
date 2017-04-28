@@ -54,6 +54,7 @@
 #include "rocks_durability_manager.h"
 
 namespace rocksdb {
+    class ColumnFamilyHandle;
     class DB;
     class Snapshot;
     class WriteBatchWithIndex;
@@ -124,7 +125,8 @@ namespace mongo {
 
         RocksTransaction* transaction() { return &_transaction; }
 
-        rocksdb::Status Get(const rocksdb::Slice& key, std::string* value);
+        rocksdb::Status Get(const rocksdb::Slice& key, std::string* value,
+			    rocksdb::ColumnFamilyHandle* cfHandle = nullptr);
 
         RocksIterator* NewIterator(std::string prefix, bool isOplog = false);
 

@@ -74,6 +74,10 @@ namespace mongo {
     class RocksEngine final : public KVEngine {
         MONGO_DISALLOW_COPYING( RocksEngine );
     public:
+	static const int kDefaultCFIndex = 0;
+	static const int kOplogCFIndex = 1;
+	
+    public:
         RocksEngine(const std::string& path, bool durable, int formatVersion, bool readOnly);
         virtual ~RocksEngine();
 
@@ -220,8 +224,8 @@ namespace mongo {
         static const std::string kDroppedPrefix;
 	static const std::string kOplogCF;
 	
-	//std::vector<ColumnFamilyHandle*> _cfHandles;
-	rocksdb::ColumnFamilyHandle* _oplogCFHandle;
+	std::vector<rocksdb::ColumnFamilyHandle*> _cfHandles;
+	//rocksdb::ColumnFamilyHandle* _oplogCFHandle;
 
         std::unique_ptr<RocksDurabilityManager> _durabilityManager;
         class RocksJournalFlusher;

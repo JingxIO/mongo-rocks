@@ -385,7 +385,8 @@ namespace mongo {
         return _snapshot;
     }
 
-    rocksdb::Status RocksRecoveryUnit::Get(const rocksdb::Slice& key, std::string* value) {
+    rocksdb::Status RocksRecoveryUnit::Get(const rocksdb::Slice& key, std::string* value,
+					   rocksdb::ColumnFamilyHandle* cfHandle) {
         if (_writeBatch.GetWriteBatch()->Count() > 0) {
             std::unique_ptr<rocksdb::WBWIIterator> wb_iterator(_writeBatch.NewIterator());
             wb_iterator->Seek(key);
@@ -400,7 +401,11 @@ namespace mongo {
         }
         rocksdb::ReadOptions options;
         options.snapshot = snapshot();
-        return _db->Get(options, key, value);
+	if (cfHandle) {
+	    return _db->Get(options, cfHandle, key, value);
+	} else {
+	    return _db->Get(options, key, value);
+	}
     }
 
     RocksIterator* RocksRecoveryUnit::NewIterator(std::string prefix, bool isOplog) {

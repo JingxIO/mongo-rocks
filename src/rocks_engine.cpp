@@ -253,9 +253,7 @@ namespace mongo {
         : _path(path)
 	, _durable(durable)
 	, _formatVersion(formatVersion)
-	, _maxPrefix(0)
-	, _oplogCFHandle(nullptr) {
-	log() << "------ RocksEngine entered";
+	, _maxPrefix(0) {
         {  // create block cache
             uint64_t cacheSizeGB = rocksGlobalOptions.cacheSizeGB;
             if (cacheSizeGB == 0) {
@@ -286,29 +284,26 @@ namespace mongo {
 	    rocksdb::ColumnFamilyDescriptor(rocksdb::kDefaultColumnFamilyName, rocksdb::ColumnFamilyOptions()),
 	    rocksdb::ColumnFamilyDescriptor(kOplogCF, rocksdb::ColumnFamilyOptions())
 	};
-	std::vector<rocksdb::ColumnFamilyHandle*> cfHandles;
-        if (readOnly) {
-            s = rocksdb::DB::OpenForReadOnly(_options(), path, cfDescriptors, &cfHandles, &db);
-        } else {
-            s = rocksdb::DB::Open(_options(), path, cfDescriptors, &cfHandles, &db);
-        }
-	if (!s.ok()) {
-	    s = (readOnly)
-		? rocksdb::DB::OpenForReadOnly(_options(), path, &db)
-		: rocksdb::DB::Open(_options(), path, &db);
-	    if (s.ok()) {
-		log() << "open db succ";
+	// Note: we could only get CFHandle* by the time db::open()ed
+	// if there is no oplogCF, create it first, then reopen db, assigns CFHandle*
+	while (true) {
+	    if (readOnly) {
+		s = rocksdb::DB::OpenForReadOnly(_options(), path, cfDescriptors, &_cfHandles, &db);
 	    } else {
-		log() << "state: " << s.getState() << ", code: " << int(s.code());
-		assert(s.ok());
+		s = rocksdb::DB::Open(_options(), path, cfDescriptors, &_cfHandles, &db);
 	    }
-	    rocksdb::ColumnFamilyHandle* cf;
-	    s = db->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), kOplogCF, &cf);
-	    assert(s.ok());
-	    _oplogCFHandle = cf;
-	} else {
-	    assert(cfHandles.size() == 2);
-	    _oplogCFHandle = cfHandles[1];
+	    if (!s.ok()) {
+		s = (readOnly)
+		    ? rocksdb::DB::OpenForReadOnly(_options(), path, &db)
+		    : rocksdb::DB::Open(_options(), path, &db);
+		rocksdb::ColumnFamilyHandle* cf;
+		s = db->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), kOplogCF, &cf);
+		assert(s.ok());
+		delete cf;
+		delete db;
+	    } else {
+		break;
+	    }
 	}
         invariantRocksOK(s);
         _db.reset(db);
@@ -512,12 +507,13 @@ namespace mongo {
             _identCollectionMap[ident] = recordStore.get();
         }
 
+	auto store = dynamic_cast<RocksRecordStore*>(recordStore.get());
 	if (NamespaceString::oplog(ns)) {
             _oplogIdent = ident.toString();
-	    auto store = dynamic_cast<RocksRecordStore*>(recordStore.get());
-	    log() << "---- wil set handle: " << _oplogCFHandle->GetName();
-	    store->setOplogCFHandle(_oplogCFHandle);
-        }
+	    store->setCFHandle(_cfHandles[kOplogCFIndex]);
+        } else {
+	    store->setCFHandle(_cfHandles[kDefaultCFIndex]);
+	}
         return std::move(recordStore);
     }
 
