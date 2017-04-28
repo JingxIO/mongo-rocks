@@ -246,10 +246,16 @@ namespace mongo {
     // first four bytes are the default prefix 0
     const std::string RocksEngine::kMetadataPrefix("\0\0\0\0metadata-", 12);
     const std::string RocksEngine::kDroppedPrefix("\0\0\0\0droppedprefix-", 18);
+    const std::string RocksEngine::kOplogCF("oplogCF");
 
     RocksEngine::RocksEngine(const std::string& path, bool durable, int formatVersion,
                              bool readOnly)
-        : _path(path), _durable(durable), _formatVersion(formatVersion), _maxPrefix(0) {
+        : _path(path)
+	, _durable(durable)
+	, _formatVersion(formatVersion)
+	, _maxPrefix(0)
+	, _oplogCFHandle(nullptr) {
+	log() << "------ RocksEngine entered";
         {  // create block cache
             uint64_t cacheSizeGB = rocksGlobalOptions.cacheSizeGB;
             if (cacheSizeGB == 0) {
@@ -273,14 +279,37 @@ namespace mongo {
             _statistics = rocksdb::CreateDBStatistics();
         }
 
-        // open DB
+        // open DB, make sure oplog-column-family will be created
         rocksdb::DB* db;
         rocksdb::Status s;
+	std::vector<rocksdb::ColumnFamilyDescriptor> cfDescriptors = {
+	    rocksdb::ColumnFamilyDescriptor(rocksdb::kDefaultColumnFamilyName, rocksdb::ColumnFamilyOptions()),
+	    rocksdb::ColumnFamilyDescriptor(kOplogCF, rocksdb::ColumnFamilyOptions())
+	};
+	std::vector<rocksdb::ColumnFamilyHandle*> cfHandles;
         if (readOnly) {
-            s = rocksdb::DB::OpenForReadOnly(_options(), path, &db);
+            s = rocksdb::DB::OpenForReadOnly(_options(), path, cfDescriptors, &cfHandles, &db);
         } else {
-            s = rocksdb::DB::Open(_options(), path, &db);
+            s = rocksdb::DB::Open(_options(), path, cfDescriptors, &cfHandles, &db);
         }
+	if (!s.ok()) {
+	    s = (readOnly)
+		? rocksdb::DB::OpenForReadOnly(_options(), path, &db)
+		: rocksdb::DB::Open(_options(), path, &db);
+	    if (s.ok()) {
+		log() << "open db succ";
+	    } else {
+		log() << "state: " << s.getState() << ", code: " << int(s.code());
+		assert(s.ok());
+	    }
+	    rocksdb::ColumnFamilyHandle* cf;
+	    s = db->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), kOplogCF, &cf);
+	    assert(s.ok());
+	    _oplogCFHandle = cf;
+	} else {
+	    assert(cfHandles.size() == 2);
+	    _oplogCFHandle = cfHandles[1];
+	}
         invariantRocksOK(s);
         _db.reset(db);
 
@@ -403,10 +432,47 @@ namespace mongo {
 
     Status RocksEngine::createRecordStore(OperationContext* opCtx, StringData ns, StringData ident,
                                           const CollectionOptions& options) {
-        BSONObjBuilder configBuilder;
-        auto s = _createIdent(ident, &configBuilder);
-        if (s.isOK() && NamespaceString::oplog(ns)) {
-            _oplogIdent = ident.toString();
+	if (NamespaceString::oplog(ns)) {
+	    return createOplogStore(opCtx, ident, options);
+	} else {
+	    BSONObjBuilder configBuilder;
+	    return _createIdent(ident, &configBuilder);
+	}
+    }
+
+    Status RocksEngine::createOplogStore(OperationContext* opCtx,
+					 StringData ident,
+					 const CollectionOptions& options) {
+	log() << "---- enter createOplogStore";
+	BSONObj config;
+        uint32_t prefix = 0;
+	BSONObjBuilder configBuilder;
+        {
+            stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+            if (_identMap.find(ident) != _identMap.end()) {
+                // already exists
+                return Status::OK();
+            }
+	    // TBD(kg) should we use a diffrent prefix + prefix-number,
+	    // or should we stick to this maxPrefix one ?
+            prefix = ++_maxPrefix;
+            configBuilder.append("prefix", static_cast<int32_t>(prefix));
+
+            config = configBuilder.obj();
+            _identMap[ident] = config.copy();
+        }
+	// still, we need to register oplog-table into meta-info
+        auto s = _db->Put(rocksdb::WriteOptions(), kMetadataPrefix + ident.toString(),
+                          rocksdb::Slice(config.objdata(), config.objsize()));
+        if (s.ok()) {
+            // As an optimization, add a key <prefix> to the DB
+            std::string encodedPrefix(encodePrefix(prefix));
+            s = _db->Put(rocksdb::WriteOptions(), encodedPrefix, rocksdb::Slice());
+        }
+	_oplogIdent = ident.toString();
+	
+        // oplog tracker
+	{
             // oplog needs two prefixes, so we also reserve the next one
             uint64_t oplogTrackerPrefix = 0;
             {
@@ -416,17 +482,18 @@ namespace mongo {
             // we also need to write out the new prefix to the database. this is just an
             // optimization
             std::string encodedPrefix(encodePrefix(oplogTrackerPrefix));
-            s = rocksToMongoStatus(
-                _db->Put(rocksdb::WriteOptions(), encodedPrefix, rocksdb::Slice()));
-        }
-        return s;
+            s = _db->Put(rocksdb::WriteOptions(), encodedPrefix, rocksdb::Slice());
+	}
+	log() << "---- finished createOplogStore";
+        return rocksToMongoStatus(s);
     }
+
 
     std::unique_ptr<RecordStore> RocksEngine::getRecordStore(OperationContext* opCtx, StringData ns,
                                              StringData ident, const CollectionOptions& options) {
-        if (NamespaceString::oplog(ns)) {
-            _oplogIdent = ident.toString();
-        }
+        //if (NamespaceString::oplog(ns)) {
+        //    _oplogIdent = ident.toString();
+        //}
 
         auto config = _getIdentConfig(ident);
         std::string prefix = _extractPrefix(config);
@@ -443,6 +510,13 @@ namespace mongo {
         {
             stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
             _identCollectionMap[ident] = recordStore.get();
+        }
+
+	if (NamespaceString::oplog(ns)) {
+            _oplogIdent = ident.toString();
+	    auto store = dynamic_cast<RocksRecordStore*>(recordStore.get());
+	    log() << "---- wil set handle: " << _oplogCFHandle->GetName();
+	    store->setOplogCFHandle(_oplogCFHandle);
         }
         return std::move(recordStore);
     }
@@ -666,7 +740,7 @@ namespace mongo {
     std::string RocksEngine::_extractPrefix(const BSONObj& config) {
         return encodePrefix(config.getField("prefix").numberInt());
     }
-
+    
     rocksdb::Options RocksEngine::_options() const {
         // default options
         rocksdb::Options options;

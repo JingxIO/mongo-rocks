@@ -49,6 +49,7 @@
 #include "mongo/util/timer.h"
 
 namespace rocksdb {
+    class ColumnFamilyHandle;
     class DB;
     class Iterator;
     class Slice;
@@ -197,7 +198,13 @@ namespace mongo {
         bool cappedMaxDocs() const { invariant(_isCapped); return _cappedMaxDocs; }
         bool cappedMaxSize() const { invariant(_isCapped); return _cappedMaxSize; }
         bool isOplog() const { return _isOplog; }
-
+	void setOplogCFHandle(rocksdb::ColumnFamilyHandle* cfHandle) {
+	    stdx::lock_guard<stdx::mutex> lk(_oplogCFMutex);
+            if (_oplogCFHandle == nullptr) {
+		_oplogCFHandle = cfHandle;
+	    }
+	}
+	
         int64_t cappedDeleteAsNeeded(OperationContext* txn, const RecordId& justInserted);
         int64_t cappedDeleteAsNeeded_inlock(OperationContext* txn, const RecordId& justInserted);
         boost::timed_mutex& cappedDeleterMutex() { return _cappedDeleterMutex; }
@@ -283,6 +290,8 @@ namespace mongo {
         const bool _isOplog;
         // nullptr iff _isOplog == false
         RocksOplogKeyTracker* _oplogKeyTracker;
+	mutable stdx::mutex _oplogCFMutex;
+	rocksdb::ColumnFamilyHandle* _oplogCFHandle;
         // keep track of when we compacted oplog last time. only valid when _isOplog == true.
         // Protected by _cappedDeleterMutex.
         Timer _oplogSinceLastCompaction;

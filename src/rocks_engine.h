@@ -164,6 +164,10 @@ namespace mongo {
         }
 
     private:
+	Status createOplogStore(OperationContext* opCtx,
+				StringData ident,
+				const CollectionOptions& options);
+
         Status _createIdent(StringData ident, BSONObjBuilder* configBuilder);
         BSONObj _getIdentConfig(StringData ident);
         std::string _extractPrefix(const BSONObj& config);
@@ -214,6 +218,10 @@ namespace mongo {
 
         static const std::string kMetadataPrefix;
         static const std::string kDroppedPrefix;
+	static const std::string kOplogCF;
+	
+	//std::vector<ColumnFamilyHandle*> _cfHandles;
+	rocksdb::ColumnFamilyHandle* _oplogCFHandle;
 
         std::unique_ptr<RocksDurabilityManager> _durabilityManager;
         class RocksJournalFlusher;
