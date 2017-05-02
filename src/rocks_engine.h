@@ -74,8 +74,8 @@ namespace mongo {
     class RocksEngine final : public KVEngine {
         MONGO_DISALLOW_COPYING( RocksEngine );
     public:
-	static const int kDefaultCFIndex = 0;
-	static const int kOplogCFIndex = 1;
+	//static const int kDefaultCFIndex = 0;
+	//static const int kOplogCFIndex = 1;
 	
     public:
         RocksEngine(const std::string& path, bool durable, int formatVersion, bool readOnly);
@@ -168,6 +168,8 @@ namespace mongo {
         }
 
     private:
+	rocksdb::Status openDB(const std::vector<rocksdb::ColumnFamilyDescriptor>& descriptors,
+		      bool readOnly, rocksdb::DB** db);
 	Status createOplogStore(OperationContext* opCtx,
 				StringData ident,
 				const CollectionOptions& options);
@@ -225,7 +227,9 @@ namespace mongo {
 	static const std::string kOplogCF;
 	
 	std::vector<rocksdb::ColumnFamilyHandle*> _cfHandles;
-	//rocksdb::ColumnFamilyHandle* _oplogCFHandle;
+	bool _useSeparateOplogCF = false;
+	int _defaultCFIndex = 0;
+	int _oplogCFIndex = 0;
 
         std::unique_ptr<RocksDurabilityManager> _durabilityManager;
         class RocksJournalFlusher;

@@ -277,34 +277,16 @@ namespace mongo {
             _statistics = rocksdb::CreateDBStatistics();
         }
 
-        // open DB, make sure oplog-column-family will be created
-        rocksdb::DB* db;
-        rocksdb::Status s;
+        // open DB, make sure oplog-column-family will be created if
+	// _useSeparateOplogCF == true
 	std::vector<rocksdb::ColumnFamilyDescriptor> cfDescriptors = {
-	    rocksdb::ColumnFamilyDescriptor(rocksdb::kDefaultColumnFamilyName, rocksdb::ColumnFamilyOptions()),
-	    rocksdb::ColumnFamilyDescriptor(kOplogCF, rocksdb::ColumnFamilyOptions())
+	    rocksdb::ColumnFamilyDescriptor(rocksdb::kDefaultColumnFamilyName, rocksdb::ColumnFamilyOptions())
 	};
-	// Note: we could only get CFHandle* by the time db::open()ed
-	// if there is no oplogCF, create it first, then reopen db, assigns CFHandle*
-	while (true) {
-	    if (readOnly) {
-		s = rocksdb::DB::OpenForReadOnly(_options(), path, cfDescriptors, &_cfHandles, &db);
-	    } else {
-		s = rocksdb::DB::Open(_options(), path, cfDescriptors, &_cfHandles, &db);
-	    }
-	    if (!s.ok()) {
-		s = (readOnly)
-		    ? rocksdb::DB::OpenForReadOnly(_options(), path, &db)
-		    : rocksdb::DB::Open(_options(), path, &db);
-		rocksdb::ColumnFamilyHandle* cf;
-		s = db->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), kOplogCF, &cf);
-		assert(s.ok());
-		delete cf;
-		delete db;
-	    } else {
-		break;
-	    }
+	if (_useSeparateOplogCF) {
+	    cfDescriptors.emplace_back(kOplogCF, rocksdb::ColumnFamilyOptions());
 	}
+	rocksdb::DB* db;
+	rocksdb::Status s = openDB(cfDescriptors, readOnly, &db);
         invariantRocksOK(s);
         _db.reset(db);
 
@@ -400,6 +382,52 @@ namespace mongo {
 
     RocksEngine::~RocksEngine() { cleanShutdown(); }
 
+    // DB::Open() failed if:
+    //  case 1. prev UseSepOplog == true, current UseSepOplog == false;
+    //  case 2. prev UseSepOplog == false, current UseSepOplog == true;
+    //  case 3. first time DB::Opened, with UseSepOplog == true
+    rocksdb::Status RocksEngine::openDB(const std::vector<rocksdb::ColumnFamilyDescriptor>& cfDescriptors,
+			       bool readOnly, rocksdb::DB** outdb) {
+	static const std::string ReopenTagKey = "ReopenTag";
+	rocksdb::DB* db = nullptr;
+	rocksdb::Status s;
+	if (readOnly) {
+	    s = rocksdb::DB::OpenForReadOnly(_options(), _path, cfDescriptors, &_cfHandles, &db);
+	} else {
+	    s = rocksdb::DB::Open(_options(), _path, cfDescriptors, &_cfHandles, &db);
+	}
+	if (!s.ok()) {
+	    if (_useSeparateOplogCF) {
+		// Note: we could only get CFHandle* by the time db::open()ed
+		// if there is no oplogCF, create it first, then reopen db, assigns CFHandle*
+		s = (readOnly)
+		    ? rocksdb::DB::OpenForReadOnly(_options(), _path, &db)
+		    : rocksdb::DB::Open(_options(), _path, &db);
+		assert(s.ok());
+		std::string val;
+		s = db->Get(rocksdb::ReadOptions(), ReopenTagKey, &val);
+		if (s.ok()) { // case 2
+		    error() << "Inconsistent Oplog Option, UseSeparateOplogCF should be false";
+		    assert(0);
+		}
+		// case 3, need to manually create oplogCF
+		rocksdb::ColumnFamilyHandle* cf = nullptr;
+		s = db->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), kOplogCF, &cf);
+		assert(s.ok());
+		delete cf;
+		delete db;
+		// recur call myself, should succ this time
+		return openDB(cfDescriptors, readOnly, outdb);
+	    } else { // case 1
+		error() << "Inconsistent Oplog Option, UseSeparateOplogCF should be true";
+		assert(0);
+	    }
+	}
+	db->Put(rocksdb::WriteOptions(), ReopenTagKey, "");
+	*outdb = db;
+	return s;
+    }
+    
     void RocksEngine::appendGlobalStats(BSONObjBuilder& b) {
         BSONObjBuilder bb(b.subobjStart("concurrentTransactions"));
         {
@@ -508,9 +536,9 @@ namespace mongo {
 	auto store = dynamic_cast<RocksRecordStore*>(recordStore.get());
 	if (NamespaceString::oplog(ns)) {
             _oplogIdent = ident.toString();
-	    store->setCFHandle(_cfHandles[kOplogCFIndex]);
+	    store->setCFHandle(_cfHandles[_oplogCFIndex]);
         } else {
-	    store->setCFHandle(_cfHandles[kDefaultCFIndex]);
+	    store->setCFHandle(_cfHandles[_defaultCFIndex]);
 	}
         return std::move(recordStore);
     }

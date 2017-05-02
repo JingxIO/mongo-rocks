@@ -880,7 +880,7 @@ namespace mongo {
         _counterManager->updateCounter(_numRecordsKey, numRecords, &wb);
         _counterManager->updateCounter(_dataSizeKey, dataSize, &wb);
         if (wb.Count() > 0) {
-	    // TBD(kg): update stats into default-cf only
+	    // update stats into default-cf only
             auto s = _db->Write(rocksdb::WriteOptions(), &wb);
             invariantRocksOK(s);
         }
