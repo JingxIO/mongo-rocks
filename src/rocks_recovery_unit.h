@@ -125,12 +125,23 @@ namespace mongo {
 
         RocksTransaction* transaction() { return &_transaction; }
 
-        rocksdb::Status Get(const rocksdb::Slice& key, std::string* value,
-			    rocksdb::ColumnFamilyHandle* cfHandle = nullptr);
+	rocksdb::Status Get(const rocksdb::Slice& key, std::string* value) {
+	    return Get(nullptr, key, value);
+	}
+        rocksdb::Status Get(rocksdb::ColumnFamilyHandle* cfHandle,
+			    const rocksdb::Slice& key, std::string* value);
 
-        RocksIterator* NewIterator(std::string prefix, bool isOplog = false);
+	RocksIterator* NewIterator(std::string prefix, bool isOplog = false) {
+	    return NewIterator(nullptr, prefix, isOplog);
+	}
+        RocksIterator* NewIterator(rocksdb::ColumnFamilyHandle* cfHandle,
+				   std::string prefix, bool isOplog = false);
 
-        static RocksIterator* NewIteratorNoSnapshot(rocksdb::DB* db, std::string prefix);
+	static RocksIterator* NewIteratorNoSnapshot(rocksdb::DB* db, std::string prefix) {
+	    return NewIteratorNoSnapshot(db, nullptr, prefix);
+	}
+        static RocksIterator* NewIteratorNoSnapshot(rocksdb::DB* db,
+						    rocksdb::ColumnFamilyHandle* cfHandle, std::string prefix);
 
         void incrementCounter(const rocksdb::Slice& counterKey,
                               std::atomic<long long>* counter, long long delta);

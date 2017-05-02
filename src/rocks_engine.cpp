@@ -438,7 +438,6 @@ namespace mongo {
     Status RocksEngine::createOplogStore(OperationContext* opCtx,
 					 StringData ident,
 					 const CollectionOptions& options) {
-	log() << "---- enter createOplogStore";
 	BSONObj config;
         uint32_t prefix = 0;
 	BSONObjBuilder configBuilder;
@@ -479,7 +478,6 @@ namespace mongo {
             std::string encodedPrefix(encodePrefix(oplogTrackerPrefix));
             s = _db->Put(rocksdb::WriteOptions(), encodedPrefix, rocksdb::Slice());
 	}
-	log() << "---- finished createOplogStore";
         return rocksToMongoStatus(s);
     }
 

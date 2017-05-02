@@ -220,8 +220,8 @@ namespace mongo {
         // shared_ptrs
         class Cursor : public SeekableRecordCursor {
         public:
-            Cursor(OperationContext* txn, rocksdb::DB* db, std::string prefix,
-                   std::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
+            Cursor(OperationContext* txn, rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cfHandle,
+		   std::string prefix, std::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
                    bool forward, bool _isCapped);
 
             boost::optional<Record> next() final;
@@ -242,6 +242,7 @@ namespace mongo {
 
             OperationContext* _txn;
             rocksdb::DB* _db; // not owned
+	    rocksdb::ColumnFamilyHandle* _cfHandle;
             std::string _prefix;
             std::shared_ptr<CappedVisibilityManager> _cappedVisibilityManager;
             bool _forward;

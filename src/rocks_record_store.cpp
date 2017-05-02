@@ -258,8 +258,8 @@ namespace mongo {
             ru->writeBatch()->Delete(cfHandle, RocksRecordStore::_makePrefixedKey(_prefix, loc));
             _deletedKeysSinceCompaction++;
         }
-        rocksdb::Iterator* newIterator(RocksRecoveryUnit* ru) {
-            return ru->NewIterator(_prefix, true);
+        rocksdb::Iterator* newIterator(RocksRecoveryUnit* ru, rocksdb::ColumnFamilyHandle* cfHandle) {
+            return ru->NewIterator(cfHandle, _prefix, true);
         }
         int decodeSize(const rocksdb::Slice& value) {
             uint32_t size =
@@ -320,8 +320,7 @@ namespace mongo {
         }
 
         // Get next id
-        std::unique_ptr<RocksIterator> iter(
-            RocksRecoveryUnit::NewIteratorNoSnapshot(_db, _prefix));
+        std::unique_ptr<RocksIterator> iter(RocksRecoveryUnit::NewIteratorNoSnapshot(_db, _cfHandle, _prefix));
         // first check if the collection is empty
         iter->SeekPrefix("");
         bool emptyCollection = !iter->Valid();
@@ -388,7 +387,7 @@ namespace mongo {
         }
 
         std::string oldValue;
-	auto status = ru->Get(key, &oldValue, _cfHandle);
+	auto status = ru->Get(_cfHandle, key, &oldValue);
         invariantRocksOK(status);
         int oldLength = oldValue.size();
 
@@ -519,9 +518,9 @@ namespace mongo {
                 // the document to the cappedCallback, but the callback is only using
                 // documents to remove them from indexes. opLog doesn't have indexes, so there
                 // should be no need for us to reconstruct the document to pass it to the callback
-                iter.reset(_oplogKeyTracker->newIterator(ru));
+                iter.reset(_oplogKeyTracker->newIterator(ru, _cfHandle));
             } else {
-                iter.reset(ru->NewIterator(_prefix));
+                iter.reset(ru->NewIterator(_cfHandle, _prefix, _isOplog));
             }
             int64_t storage;
             iter->Seek(RocksRecordStore::_makeKey(_cappedOldestKeyHint, &storage));
@@ -730,7 +729,7 @@ namespace mongo {
         }
 
         std::string old_value;
-        auto status = ru->Get(key, &old_value, _cfHandle);
+        auto status = ru->Get(_cfHandle, key, &old_value);
         invariantRocksOK(status);
         int old_length = old_value.size();
 
@@ -772,7 +771,7 @@ namespace mongo {
             ru->setOplogReadTill(_cappedVisibilityManager->oplogStartHack());
         }
 
-        return stdx::make_unique<Cursor>(txn, _db, _prefix, _cappedVisibilityManager, forward,
+        return stdx::make_unique<Cursor>(txn, _db, _cfHandle, _prefix, _cappedVisibilityManager, forward,
                                          _isCapped);
     }
 
@@ -780,7 +779,7 @@ namespace mongo {
         // We can't use getCursor() here because we need to ignore the visibility of records (i.e.
         // we need to delete all records, regardless of visibility)
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
-        std::unique_ptr<RocksIterator> iterator(ru->NewIterator(_prefix, _isOplog));
+        std::unique_ptr<RocksIterator> iterator(ru->NewIterator(_cfHandle, _prefix, _isOplog));
         for (iterator->SeekToFirst(); iterator->Valid(); iterator->Next()) {
             deleteRecord(txn, _makeRecordId(iterator->key()));
         }
@@ -904,7 +903,7 @@ namespace mongo {
         // we use _oplogKeyTracker, which contains exactly the same keys as oplog. the difference is
         // that values are different (much smaller), so reading is faster. in this case, we only
         // need keys (we never touch the values), so this works nicely
-        std::unique_ptr<rocksdb::Iterator> iter(_oplogKeyTracker->newIterator(ru));
+        std::unique_ptr<rocksdb::Iterator> iter(_oplogKeyTracker->newIterator(ru, _cfHandle));
         int64_t storage;
         iter->Seek(_makeKey(startingPosition, &storage));
         if (!iter->Valid()) {
@@ -1018,7 +1017,7 @@ namespace mongo {
         RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
 
         std::string valueStorage;
-	auto status = ru->Get(_makePrefixedKey(prefix, loc), &valueStorage, cfHandle);
+	auto status = ru->Get(cfHandle, _makePrefixedKey(prefix, loc), &valueStorage);
         if (status.IsNotFound()) {
             return RecordData(nullptr, 0);
         }
@@ -1044,12 +1043,14 @@ namespace mongo {
     RocksRecordStore::Cursor::Cursor(
             OperationContext* txn,
             rocksdb::DB* db,
+	    rocksdb::ColumnFamilyHandle* cfHandle,
             std::string prefix,
             std::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
             bool forward,
             bool isCapped)
         : _txn(txn),
           _db(db),
+	  _cfHandle(cfHandle),
           _prefix(std::move(prefix)),
           _cappedVisibilityManager(cappedVisibilityManager),
           _forward(forward),
@@ -1100,7 +1101,7 @@ namespace mongo {
             return _iterator.get();
         }
         _iterator.reset(RocksRecoveryUnit::getRocksRecoveryUnit(_txn)
-                ->NewIterator(_prefix, /* isOplog */ !_readUntilForOplog.isNull()));
+			->NewIterator(_cfHandle, _prefix, /* isOplog */ !_readUntilForOplog.isNull()));
         if (!_needFirstSeek) {
             positionIterator();
         }
@@ -1142,7 +1143,7 @@ namespace mongo {
         _iterator.reset();
 
         rocksdb::Status status = RocksRecoveryUnit::getRocksRecoveryUnit(_txn)
-            ->Get(_makePrefixedKey(_prefix, id), &_seekExactResult);
+            ->Get(_cfHandle, _makePrefixedKey(_prefix, id), &_seekExactResult);
 
         if (status.IsNotFound()) {
             _eof = true;
@@ -1165,7 +1166,7 @@ namespace mongo {
     bool RocksRecordStore::Cursor::restore() {
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(_txn);
         if (!_iterator.get() || _currentSequenceNumber != ru->snapshot()->GetSequenceNumber()) {
-            _iterator.reset(ru->NewIterator(_prefix, /* isOplog */ !_readUntilForOplog.isNull()));
+            _iterator.reset(ru->NewIterator(_cfHandle, _prefix, /* isOplog */ !_readUntilForOplog.isNull()));
             _currentSequenceNumber = ru->snapshot()->GetSequenceNumber();
         }
 
