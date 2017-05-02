@@ -294,9 +294,9 @@ namespace mongo {
           _cappedCallback(cappedCallback),
           _cappedDeleteCheckCount(0),
           _isOplog(NamespaceString::oplog(ns)),
-	  _cfHandle(nullptr),
           _oplogKeyTracker(_isOplog ? new RocksOplogKeyTracker(rocksGetNextPrefix(_prefix))
                                     : nullptr),
+	  _cfHandle(nullptr),
           _cappedOldestKeyHint(0),
           _cappedVisibilityManager((_isCapped || _isOplog)
                                        ? new CappedVisibilityManager(this, durabilityManager)
@@ -795,7 +795,7 @@ namespace mongo {
         std::string endString(_makePrefixedKey(_prefix, RecordId::max()));
         rocksdb::Slice beginRange(beginString);
         rocksdb::Slice endRange(endString);
-	rocksToMongoStatus(_db->CompactRange(_cfHandle, &beginRange, &endRange));
+	return rocksToMongoStatus(_db->CompactRange(_cfHandle, &beginRange, &endRange));
     }
 
     Status RocksRecordStore::validate( OperationContext* txn,

@@ -276,7 +276,10 @@ namespace mongo {
         if (rocksGlobalOptions.counters) {
             _statistics = rocksdb::CreateDBStatistics();
         }
-
+	_useSeparateOplogCF = rocksGlobalOptions.useSeparateOplogCF;
+	_oplogCFIndex = _useSeparateOplogCF ? 1 : 0;
+	log() << "useSeparateOplogCF: " << _useSeparateOplogCF << ", oplogCFIndex: " << _oplogCFIndex;
+	
         // open DB, make sure oplog-column-family will be created if
 	// _useSeparateOplogCF == true
 	std::vector<rocksdb::ColumnFamilyDescriptor> cfDescriptors = {
@@ -388,7 +391,7 @@ namespace mongo {
     //  case 3. first time DB::Opened, with UseSepOplog == true
     rocksdb::Status RocksEngine::openDB(const std::vector<rocksdb::ColumnFamilyDescriptor>& cfDescriptors,
 			       bool readOnly, rocksdb::DB** outdb) {
-	static const std::string ReopenTagKey = "ReopenTag";
+	std::string ReopenTagKey("\0\0\0\0ReopenTag", 13);
 	rocksdb::DB* db = nullptr;
 	rocksdb::Status s;
 	if (readOnly) {
