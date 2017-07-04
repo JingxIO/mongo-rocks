@@ -87,7 +87,7 @@ namespace mongo {
                                "This is still experimental. "
                                "Use this only if you know what you're doing")
             .setDefault(moe::Value(false));
-	rocksOptions
+        rocksOptions
             .addOptionChaining("storage.rocksdb.useSeparateOplogCF",
                                "rocksdbSeparateOplogCF", moe::Bool,
                                "Use separate column-family to store oplogs. "
@@ -133,7 +133,7 @@ namespace mongo {
               params["storage.rocksdb.singleDeleteIndex"].as<bool>();
             log() << "Use SingleDelete in index: " << rocksGlobalOptions.singleDeleteIndex;
         }
-	if (params.count("storage.rocksdb.useSeparateOplogCF")) {
+        if (params.count("storage.rocksdb.useSeparateOplogCF")) {
             rocksGlobalOptions.useSeparateOplogCF =
               params["storage.rocksdb.useSeparateOplogCF"].as<bool>();
             log() << "UseSeparateOplogCF: " << rocksGlobalOptions.useSeparateOplogCF;

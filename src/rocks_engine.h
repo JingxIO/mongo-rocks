@@ -74,10 +74,6 @@ namespace mongo {
     class RocksEngine final : public KVEngine {
         MONGO_DISALLOW_COPYING( RocksEngine );
     public:
-    //static const int kDefaultCFIndex = 0;
-    //static const int kOplogCFIndex = 1;
-
-    public:
         RocksEngine(const std::string& path, bool durable, int formatVersion, bool readOnly);
         virtual ~RocksEngine();
 
@@ -115,11 +111,11 @@ namespace mongo {
             return false;
         }
 
-        virtual int flushAllFiles(OperationContext* txn, bool sync) override;
+        virtual int flushAllFiles(OperationContext* opCtx, bool sync) override;
 
-        virtual Status beginBackup(OperationContext* txn) override;
+        virtual Status beginBackup(OperationContext* opCtx) override;
 
-        virtual void endBackup(OperationContext* txn) override;
+        virtual void endBackup(OperationContext* opCtx) override;
 
         virtual bool isDurable() const override { return _durable; }
 
@@ -158,6 +154,8 @@ namespace mongo {
 
         RocksTransactionEngine* getTransactionEngine() { return &_transactionEngine; }
 
+        RocksCompactionScheduler* getCompactionScheduler() const { return _compactionScheduler.get(); }
+
         int getMaxWriteMBPerSec() const { return _maxWriteMBPerSec; }
         void setMaxWriteMBPerSec(int maxWriteMBPerSec);
 
@@ -172,8 +170,8 @@ namespace mongo {
                                const std::vector<rocksdb::ColumnFamilyDescriptor>& descriptors,
                                bool readOnly, rocksdb::DB** db);
         Status createOplogStore(OperationContext* opCtx,
-        StringData ident,
-        const CollectionOptions& options);
+                                StringData ident,
+                                const CollectionOptions& options);
 
         Status _createIdent(StringData ident, BSONObjBuilder* configBuilder);
         BSONObj _getIdentConfig(StringData ident);

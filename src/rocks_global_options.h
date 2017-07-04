@@ -56,7 +56,7 @@ namespace mongo {
         bool crashSafeCounters;
         bool counters;
         bool singleDeleteIndex;
-	bool useSeparateOplogCF;
+        bool useSeparateOplogCF;
     };
 
     extern RocksGlobalOptions rocksGlobalOptions;

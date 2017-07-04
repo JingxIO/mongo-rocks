@@ -125,23 +125,23 @@ namespace mongo {
 
         RocksTransaction* transaction() { return &_transaction; }
 
-	rocksdb::Status Get(const rocksdb::Slice& key, std::string* value) {
-	    return Get(nullptr, key, value);
-	}
+        rocksdb::Status Get(const rocksdb::Slice& key, std::string* value) {
+            return Get(nullptr, key, value);
+        }
         rocksdb::Status Get(rocksdb::ColumnFamilyHandle* cfHandle,
-			    const rocksdb::Slice& key, std::string* value);
+                            const rocksdb::Slice& key, std::string* value);
 
-	RocksIterator* NewIterator(std::string prefix, bool isOplog = false) {
-	    return NewIterator(nullptr, prefix, isOplog);
-	}
+        RocksIterator* NewIterator(std::string prefix, bool isOplog = false) {
+            return NewIterator(nullptr, prefix, isOplog);
+        }
         RocksIterator* NewIterator(rocksdb::ColumnFamilyHandle* cfHandle,
-				   std::string prefix, bool isOplog = false);
+                                   std::string prefix, bool isOplog = false);
 
-	static RocksIterator* NewIteratorNoSnapshot(rocksdb::DB* db, std::string prefix) {
-	    return NewIteratorNoSnapshot(db, nullptr, prefix);
-	}
+        static RocksIterator* NewIteratorNoSnapshot(rocksdb::DB* db, std::string prefix) {
+            return NewIteratorNoSnapshot(db, nullptr, prefix);
+        }
         static RocksIterator* NewIteratorNoSnapshot(rocksdb::DB* db,
-						    rocksdb::ColumnFamilyHandle* cfHandle, std::string prefix);
+                                                    rocksdb::ColumnFamilyHandle* cfHandle, std::string prefix);
 
         void incrementCounter(const rocksdb::Slice& counterKey,
                               std::atomic<long long>* counter, long long delta);
@@ -207,7 +207,7 @@ namespace mongo {
         typedef OwnedPointerVector<Change> Changes;
         Changes _changes;
 
-        uint64_t _myTransactionCount;
+        uint64_t _mySnapshotId;
 
         RecordId _oplogReadTill;
 
